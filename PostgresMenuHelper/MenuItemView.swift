@@ -23,21 +23,22 @@ class MenuItemViewController: NSViewController {
 	
 	
 	@IBAction func serverAction(_ sender: AnyObject?) {
-		if !server.running {
-			server.start(serverActionCompleted)
-		} else {
+		if server.running {
 			server.stop(serverActionCompleted)
+		} else {
+			server.start(serverActionCompleted)
 		}
 	}
 	
 	
-	private func serverActionCompleted(actionStatus: Server.ActionStatus) {
-		if case let .Failure(error) = actionStatus {
-			self.errorIconVisible = true
-			self.errorTooltip = error.localizedDescription
-		} else {
+	private func serverActionCompleted(status: Server.ActionStatus) {
+		switch status {
+		case .Success:
 			self.errorIconVisible = false
 			self.errorTooltip = ""
+		case let .Failure(error):
+			self.errorIconVisible = true
+			self.errorTooltip = error.localizedDescription
 		}
 		
 		DistributedNotificationCenter.default().post(name: Server.StatusChangedNotification, object: nil)

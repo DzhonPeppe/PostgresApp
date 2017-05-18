@@ -22,8 +22,8 @@ class ServerViewController: NSViewController, MainWindowModelConsumer {
 	
 	@IBAction func startServer(_ sender: AnyObject?) {
 		guard let server = mainWindowModel.firstSelectedServer else { return }
-		server.start { (actionStatus) in
-			if case let .Failure(error) = actionStatus {
+		server.start { (error) in
+			if let error = error {
 				self.presentError(error, modalFor: self.view.window!, delegate: nil, didPresent: nil, contextInfo: nil)
 			}
 		}
@@ -32,8 +32,8 @@ class ServerViewController: NSViewController, MainWindowModelConsumer {
 	
 	@IBAction func stopServer(_ sender: AnyObject?) {
 		guard let server = mainWindowModel.firstSelectedServer else { return }
-		server.stop { (actionStatus) in
-			if case let .Failure(error) = actionStatus {
+		server.stop { (error) in
+			if let error = error {
 				self.presentError(error, modalFor: self.view.window!, delegate: nil, didPresent: nil, contextInfo: nil)
 			}
 		}

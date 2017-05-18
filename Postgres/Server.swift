@@ -30,8 +30,10 @@ class Server: NSObject {
 	
 	enum ActionStatus {
 		case Success
-		case Failure(NSError)
+		case Failure(Error)
 	}
+	
+	typealias CompletionHandler = (ActionStatus) -> ()
 	
 	
 	dynamic var name: String = "" {
@@ -117,101 +119,82 @@ class Server: NSObject {
 	
 	
 	// MARK: Async handlers
-	func start(_ completion: @escaping (ActionStatus) -> Void) {
+	func start(_ completionHandler: @escaping CompletionHandler) {
 		busy = true
 		updateServerStatus()
 		
 		DispatchQueue.global().async {
-			let statusResult: ActionStatus
-			
-			switch self.serverStatus {
-			
-			case .NoBinaries:
-				let userInfo = [
-					NSLocalizedDescriptionKey: NSLocalizedString("The binaries for this PostgreSQL server were not found", comment: ""),
-				]
-				statusResult = .Failure(NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo))
-				
-			case .PortInUse:
-				let userInfo = [
-					NSLocalizedDescriptionKey: NSLocalizedString("Port \(self.port) is already in use", comment: ""),
-					NSLocalizedRecoverySuggestionErrorKey: "Usually this means that there is already a PostgreSQL server running on your Mac. If you want to run multiple servers simultaneously, use different ports."
-				]
-				statusResult = .Failure(NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo))
-				
-			case .DataDirInUse:
-				let userInfo = [
-					NSLocalizedDescriptionKey: NSLocalizedString("There is already a PostgreSQL server running in this data directory", comment: ""),
-				]
-				statusResult = .Failure(NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo))
-				
-			case .DataDirEmpty:
-				if self.portInUse() {
+			let status: ActionStatus
+			do {
+				switch self.serverStatus {
+					
+				case .NoBinaries:
+					let userInfo = [
+						NSLocalizedDescriptionKey: NSLocalizedString("The binaries for this PostgreSQL server were not found", comment: ""),
+						]
+					throw NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo)
+					
+				case .PortInUse:
 					let userInfo = [
 						NSLocalizedDescriptionKey: NSLocalizedString("Port \(self.port) is already in use", comment: ""),
 						NSLocalizedRecoverySuggestionErrorKey: "Usually this means that there is already a PostgreSQL server running on your Mac. If you want to run multiple servers simultaneously, use different ports."
 					]
-					statusResult = .Failure(NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo))
+					throw NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo)
+					
+				case .DataDirInUse:
+					let userInfo = [
+						NSLocalizedDescriptionKey: NSLocalizedString("There is already a PostgreSQL server running in this data directory", comment: ""),
+						]
+					throw NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo)
+					
+				case .DataDirEmpty:
+					if self.portInUse() {
+						let userInfo = [
+							NSLocalizedDescriptionKey: NSLocalizedString("Port \(self.port) is already in use", comment: ""),
+							NSLocalizedRecoverySuggestionErrorKey: "Usually this means that there is already a PostgreSQL server running on your Mac. If you want to run multiple servers simultaneously, use different ports."
+						]
+						throw NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo)
+					}
+					
+					try self.initDatabaseSync()
+					try self.startSync()
+					try self.createUserSync()
+					try self.createUserDatabaseSync()
+					
+				case .Running:
 					break
+					
+				case .Startable:
+					try self.startSync()
+					
+				case .StalePidFile:
+					let userInfo = [
+						NSLocalizedDescriptionKey: NSLocalizedString("The data directory contains an old postmaster.pid file", comment: ""),
+						NSLocalizedRecoverySuggestionErrorKey: "The data directory contains a postmaster.pid file, which usually means that the server is already running. When the server crashes or is killed, you have to remove this file before you can restart the server. Make sure that the database process is definitely not runnnig anymore, otherwise your data directory will be corrupted."
+					]
+					throw NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo)
+					
+				case .PidFileUnreadable:
+					let userInfo = [
+						NSLocalizedDescriptionKey: NSLocalizedString("The data directory contains an unreadable postmaster.pid file", comment: "")
+					]
+					throw NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo)
+					
+				case .Unknown:
+					let userInfo = [
+						NSLocalizedDescriptionKey: NSLocalizedString("Unknown server status", comment: "")
+					]
+					throw NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo)
+					
 				}
-				
-				let initResult = self.initDatabaseSync()
-				if case .Failure = initResult {
-					statusResult = initResult
-					break
-				}
-				
-				let startResult = self.startSync()
-				if case .Failure = startResult {
-					statusResult = startResult
-					break
-				}
-				
-				let createUserResult = self.createUserSync()
-				guard case .Success = createUserResult else {
-					statusResult = createUserResult
-					break
-				}
-				
-				let createDBResult = self.createUserDatabaseSync()
-				if case .Failure = createDBResult {
-					statusResult = createDBResult
-					break
-				}
-				
-				statusResult = .Success
-				
-			case .Running:
-				statusResult = .Success
-				
-			case .Startable:
-				let startRes = self.startSync()
-				statusResult = startRes
-				
-			case .StalePidFile:
-				let userInfo = [
-					NSLocalizedDescriptionKey: NSLocalizedString("The data directory contains an old postmaster.pid file", comment: ""),
-					NSLocalizedRecoverySuggestionErrorKey: "The data directory contains a postmaster.pid file, which usually means that the server is already running. When the server crashes or is killed, you have to remove this file before you can restart the server. Make sure that the database process is definitely not runnnig anymore, otherwise your data directory will be corrupted."
-				]
-				statusResult = .Failure(NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo))
-				
-			case .PidFileUnreadable:
-				let userInfo = [
-					NSLocalizedDescriptionKey: NSLocalizedString("The data directory contains an unreadable postmaster.pid file", comment: "")
-				]
-				statusResult = .Failure(NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo))
-				
-			case .Unknown:
-				let userInfo = [
-					NSLocalizedDescriptionKey: NSLocalizedString("Unknown server status", comment: "")
-				]
-				statusResult = .Failure(NSError(domain: "com.postgresapp.Postgres2.server-status", code: 0, userInfo: userInfo))
-				
+				status = .Success
+			} catch let error {
+				status = .Failure(error)
 			}
 			
 			DispatchQueue.main.async {
 				self.updateServerStatus()
-				completion(statusResult)
+				completionHandler(status)
 				self.busy = false
 			}
 			
@@ -221,14 +204,20 @@ class Server: NSObject {
 	
 	/// Attempts to stop the server (in a background thread)
 	/// - parameter completion: This closure will be called on the main thread when the server has stopped.
-	func stop(_ completion: @escaping (ActionStatus) -> Void) {
+	func stop(_ completionHandler: @escaping CompletionHandler) {
 		busy = true
 		
 		DispatchQueue.global().async {
-			let stopRes = self.stopSync()
+			let status: ActionStatus
+			do {
+				try self.stopSync()
+				status = .Success
+			} catch let error {
+				status = .Failure(error)
+			}
 			DispatchQueue.main.async {
 				self.updateServerStatus()
-				completion(stopRes)
+				completionHandler(status)
 				self.busy = false
 			}
 		}
@@ -357,14 +346,14 @@ class Server: NSObject {
 	
 	
 	// MARK: Sync handlers
-	func startSync() -> ActionStatus {
+	func startSync() throws {
 		let process = Process()
 		let launchPath = binPath.appending("/pg_ctl")
 		guard FileManager().fileExists(atPath: launchPath) else {
 			let userInfo: [String: Any] = [
 				NSLocalizedDescriptionKey: NSLocalizedString("The binaries for this PostgreSQL server were not found.", comment: ""),
 			]
-			return .Failure(NSError(domain: "com.postgresapp.Postgres2.pg_ctl", code: 0, userInfo: userInfo))
+			throw NSError(domain: "com.postgresapp.Postgres2.pg_ctl", code: 0, userInfo: userInfo)
 		}
 		process.launchPath = launchPath
 		process.arguments = [
@@ -381,9 +370,7 @@ class Server: NSObject {
 		let errorDescription = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "(incorrectly encoded error message)"
 		process.waitUntilExit()
 		
-		if process.terminationStatus == 0 {
-			return .Success
-		} else {
+		if process.terminationStatus != 0 {
 			let userInfo: [String: Any] = [
 				NSLocalizedDescriptionKey: NSLocalizedString("Could not start PostgreSQL server.", comment: ""),
 				NSLocalizedRecoverySuggestionErrorKey: errorDescription,
@@ -395,12 +382,12 @@ class Server: NSObject {
 					return true
 				})
 			]
-			return .Failure(NSError(domain: "com.postgresapp.Postgres2.pg_ctl", code: 0, userInfo: userInfo))
+			throw NSError(domain: "com.postgresapp.Postgres2.pg_ctl", code: 0, userInfo: userInfo)
 		}
 	}
 	
 	
-	func stopSync() -> ActionStatus {
+	func stopSync() throws {
 		let process = Process()
 		process.launchPath = binPath.appending("/pg_ctl")
 		process.arguments = [
@@ -416,9 +403,7 @@ class Server: NSObject {
 		let errorDescription = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "(incorrectly encoded error message)"
 		process.waitUntilExit()
 		
-		if process.terminationStatus == 0 {
-			return .Success
-		} else {
+		guard process.terminationStatus == 0 else {
 			let userInfo: [String: Any] = [
 				NSLocalizedDescriptionKey: NSLocalizedString("Could not stop PostgreSQL server.", comment: ""),
 				NSLocalizedRecoverySuggestionErrorKey: errorDescription,
@@ -430,12 +415,12 @@ class Server: NSObject {
 					return true
 				})
 			]
-			return .Failure(NSError(domain: "com.postgresapp.Postgres2.pg_ctl", code: 0, userInfo: userInfo))
+			throw NSError(domain: "com.postgresapp.Postgres2.pg_ctl", code: 0, userInfo: userInfo)
 		}
 	}
 	
 	
-	private func initDatabaseSync() -> ActionStatus {
+	private func initDatabaseSync() throws {
 		let process = Process()
 		process.launchPath = binPath.appending("/initdb")
 		process.arguments = [
@@ -451,9 +436,7 @@ class Server: NSObject {
 		let errorDescription = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "(incorrectly encoded error message)"
 		process.waitUntilExit()
 		
-		if process.terminationStatus == 0 {
-			return .Success
-		} else {
+		if process.terminationStatus != 0 {
 			let userInfo: [String: Any] = [
 				NSLocalizedDescriptionKey: NSLocalizedString("Could not initialize database cluster.", comment: ""),
 				NSLocalizedRecoverySuggestionErrorKey: errorDescription,
@@ -465,12 +448,12 @@ class Server: NSObject {
 					return true
 				})
 			]
-			return .Failure(NSError(domain: "com.postgresapp.Postgres2.initdb", code: 0, userInfo: userInfo))
+			throw NSError(domain: "com.postgresapp.Postgres2.initdb", code: 0, userInfo: userInfo)
 		}
 	}
 	
 	
-	private func createUserSync() -> ActionStatus {
+	private func createUserSync() throws {
 		let process = Process()
 		process.launchPath = binPath.appending("/createuser")
 		process.arguments = [
@@ -486,9 +469,7 @@ class Server: NSObject {
 		let errorDescription = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "(incorrectly encoded error message)"
 		process.waitUntilExit()
 		
-		if process.terminationStatus == 0 {
-			return .Success
-		} else {
+		if process.terminationStatus != 0 {
 			let userInfo: [String: Any] = [
 				NSLocalizedDescriptionKey: NSLocalizedString("Could not create default user.", comment: ""),
 				NSLocalizedRecoverySuggestionErrorKey: errorDescription,
@@ -500,12 +481,12 @@ class Server: NSObject {
 					return true
 				})
 			]
-			return .Failure(NSError(domain: "com.postgresapp.Postgres2.createuser", code: 0, userInfo: userInfo))
+			throw NSError(domain: "com.postgresapp.Postgres2.createuser", code: 0, userInfo: userInfo)
 		}
 	}
 	
 	
-	private func createUserDatabaseSync() -> ActionStatus {
+	private func createUserDatabaseSync() throws {
 		let process = Process()
 		process.launchPath = binPath.appending("/createdb")
 		process.arguments = [
@@ -519,9 +500,7 @@ class Server: NSObject {
 		let errorDescription = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? "(incorrectly encoded error message)"
 		process.waitUntilExit()
 		
-		if process.terminationStatus == 0 {
-			return .Success
-		} else {
+		if process.terminationStatus != 0 {
 			let userInfo: [String: Any] = [
 				NSLocalizedDescriptionKey: NSLocalizedString("Could not create user database.", comment: ""),
 				NSLocalizedRecoverySuggestionErrorKey: errorDescription,
@@ -533,7 +512,7 @@ class Server: NSObject {
 					return true
 				})
 			]
-			return .Failure(NSError(domain: "com.postgresapp.Postgres2.createdb", code: 0, userInfo: userInfo))
+			throw NSError(domain: "com.postgresapp.Postgres2.createdb", code: 0, userInfo: userInfo)
 		}
 	}
 	
